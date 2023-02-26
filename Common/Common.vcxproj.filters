@@ -467,6 +467,9 @@
     <ClInclude Include="GPU\OpenGL\GLFrameData.h">
       <Filter>GPU\OpenGL</Filter>
     </ClInclude>
+    <ClInclude Include="DDSLoad.h">
+      <Filter>Data\Format</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="ABI.cpp" />
@@ -883,6 +886,9 @@
     </ClCompile>
     <ClCompile Include="GPU\OpenGL\GLFrameData.cpp">
       <Filter>GPU\OpenGL</Filter>
+    </ClCompile>
+    <ClCompile Include="Data\Format\DDSLoad.cpp">
+      <Filter>Data\Format</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
