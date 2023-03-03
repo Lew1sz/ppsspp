@@ -29,6 +29,7 @@
 
 #include "ext/xxhash.h"
 
+#include "Common/Data/Format/DDSLoad.h"
 #include "Common/Data/Convert/ColorConv.h"
 #include "Common/Data/Format/IniFile.h"
 #include "Common/Data/Format/ZIMLoad.h"
@@ -477,7 +478,7 @@ ReplacedTexture &TextureReplacer::FindReplacement(u64 cachekey, u32 hash, int w,
 		return it->second;
 	}
 
-	// Okay, let's construct the result.
+	// Okay, let's construct the result. We insert into the map by accessing.
 	ReplacedTexture &result = cache_[replacementKey];
 	if (!g_Config.bReplaceTexturesAllowLate || budget > 0.0) {
 		PopulateReplacement(&result, cachekey, hash, w, h);
@@ -549,6 +550,7 @@ void TextureReplacer::PopulateReplacement(ReplacedTexture *result, u64 cachekey,
 enum class ReplacedImageType {
 	PNG,
 	ZIM,
+	DDS,
 	INVALID,
 };
 
@@ -557,6 +559,8 @@ static ReplacedImageType Identify(const uint8_t magic[4]) {
 		return ReplacedImageType::ZIM;
 	if (magic[0] == 0x89 && strncmp((const char *)&magic[1], "PNG", 3) == 0)
 		return ReplacedImageType::PNG;
+	if (strncmp((const char *)magic, "DDS ", 4) == 0)
+		return ReplacedImageType::DDS;
 	return ReplacedImageType::INVALID;
 }
 
@@ -577,8 +581,14 @@ static ReplacedImageType Identify(zip_file_t *zf) {
 	return Identify(magic);
 }
 
+#define MK_FOURCC(str) (str[0] | ((uint8_t)str[1] << 8) | ((uint8_t)str[2] << 16) | ((uint8_t)str[3] << 24))
+
 bool TextureReplacer::PopulateLevelFromPath(ReplacedTextureLevel &level, bool ignoreError) {
 	bool good = false;
+
+	INFO_LOG(G3D, "Opening file '%s' for texture replacement...", level.file.c_str());
+
+	double start = time_now_d();
 
 	FILE *fp = File::OpenCFile(level.file, "rb");
 	if (!fp) {
@@ -588,7 +598,44 @@ bool TextureReplacer::PopulateLevelFromPath(ReplacedTextureLevel &level, bool ig
 	}
 
 	auto imageType = Identify(fp);
-	if (imageType == ReplacedImageType::ZIM) {
+	if (imageType == ReplacedImageType::DDS) {
+		fseek(fp, 4, SEEK_SET);
+		DDSHeader header;
+		DDSHeaderDXT10 header10{};
+		fread(&header, sizeof(header), 1, fp);
+		u32 format;
+		if (header.ddspf.dwFlags & DDPF_FOURCC) {
+			char *fcc = (char *)&header.ddspf.dwFourCC;
+			INFO_LOG(G3D, "DDS fourcc: %c%c%c%c", fcc[0], fcc[1], fcc[2], fcc[3]);
+			if (header.ddspf.dwFourCC == 'DX10') {
+				fread(&header10, sizeof(header10), 1, fp);
+				format = header10.dxgiFormat;
+				// TODO: Maybe pic
+			} else {
+				format = header.ddspf.dwFourCC;
+			}
+		}
+		// OK, there are a number of possible formats we might have ended up with. We choose just a few
+		// to support for now.
+		switch (header.ddspf.dwFourCC) {
+		case MK_FOURCC("DXT1"):
+			level.fmt = Draw::DataFormat::BC1_RGBA_UNORM_BLOCK;
+			break;
+		case MK_FOURCC("DXT3"):
+			level.fmt = Draw::DataFormat::BC2_UNORM_BLOCK;
+			break;
+		case MK_FOURCC("DXT5"):
+			level.fmt = Draw::DataFormat::BC3_UNORM_BLOCK;
+			break;
+		default:
+			ERROR_LOG(G3D, "DDS pixel format not supported.");
+			fclose(fp);
+			return false;
+		}
+		level.w = header.dwWidth;
+		level.h = header.dwHeight;
+		good = true;
+	} else if (imageType == ReplacedImageType::ZIM) {
 		fseek(fp, 4, SEEK_SET);
 		good = fread(&level.w, 4, 1, fp) == 1;
 		good = good && fread(&level.h, 4, 1, fp) == 1;
@@ -613,6 +660,8 @@ bool TextureReplacer::PopulateLevelFromPath(ReplacedTextureLevel &level, bool ig
 	}
 	fclose(fp);
 
+	INFO_LOG(G3D, "Time %0.3f", time_now_d() - start);
+
 	return good;
 }
 
@@ -634,7 +683,9 @@ bool TextureReplacer::PopulateLevelFromZip(ReplacedTextureLevel &level, bool ign
 	zip_fclose(zf);
 
 	zf = zip_fopen_index(level.zinfo->z, level.zi, 0);
-	if (imageType == ReplacedImageType::ZIM) {
+	if (imageType == ReplacedImageType::DDS) {
+		_assert_msg_(false, "Not yet supported");
+	} else if (imageType == ReplacedImageType::ZIM) {
 		uint32_t ignore = 0;
 		good = zip_fread(zf, &ignore, 4) == 4;
 		good = good && zip_fread(zf, &level.w, 4) == 4;
@@ -1116,7 +1167,31 @@ void ReplacedTexture::PrepareData(int level) {
 			fclose(fp);
 	};
 
-	if (imageType == ReplacedImageType::ZIM) {
+	if (imageType == ReplacedImageType::DDS) {
+		fseek(fp, 4, SEEK_SET);
+		DDSHeader header;
+		DDSHeaderDXT10 header10{};
+		fread(&header, sizeof(header), 1, fp);
+		u32 format;
+		if (header.ddspf.dwFlags & DDPF_FOURCC) {
+			char *fcc = (char *)&header.ddspf.dwFourCC;
+			INFO_LOG(G3D, "DDS fourcc: %c%c%c%c", fcc[0], fcc[1], fcc[2], fcc[3]);
+			if (header.ddspf.dwFourCC == 'DX10') {
+				fread(&header10, sizeof(header10), 1, fp);
+				format = header10.dxgiFormat;
+				// TODO: Maybe pic
+			} else {
+				format = header.ddspf.dwFourCC;
+			}
+		}
+		// For compressed formats, this is supposed to be the linear size.
+		size_t bytes = header.dwPitchOrLinearSize;
+		out.resize(bytes);
+		size_t read_bytes = fread(&out[0], 1, bytes, fp);
+		if (read_bytes != bytes) {
+			WARN_LOG(G3D, "DDS: Expected %d bytes, got %d", bytes, read_bytes);
+		}
+	} else if (imageType == ReplacedImageType::ZIM) {
 		size_t zimSize = 0;
 		if (fp) {
 			zimSize = File::GetFileSize(fp);
@@ -1238,6 +1313,8 @@ void ReplacedTexture::PrepareData(int level) {
 				alphaStatus_ = ReplacedTextureAlpha(res);
 			}
 		}
+	} else {
+		WARN_LOG(G3D, "Don't know how to load this image type! %d", (int)imageType);
 	}
 
 	cleanup();
@@ -1289,21 +1366,29 @@ bool ReplacedTexture::Load(int level, void *out, int rowPitch) {
 
 	if (data.empty())
 		return false;
-	if (rowPitch < info.w * 4) {
-		ERROR_LOG_REPORT(G3D, "Replacement rowPitch=%d, but w=%d (level=%d)", rowPitch, info.w * 4, level);
-		return false;
-	}
-	_assert_msg_(data.size() == info.w * info.h * 4, "Data has wrong size");
 
-	if (rowPitch == info.w * 4) {
-		ParallelMemcpy(&g_threadManager, out, &data[0], info.w * 4 * info.h);
+	if (info.fmt == Draw::DataFormat::R8G8B8A8_UNORM) {
+		if (rowPitch < info.w * 4) {
+			ERROR_LOG_REPORT(G3D, "Replacement rowPitch=%d, but w=%d (level=%d)", rowPitch, info.w * 4, level);
+			return false;
+		}
+
+		_assert_msg_(data.size() == info.w * info.h * 4, "Data has wrong size");
+
+		if (rowPitch == info.w * 4) {
+			ParallelMemcpy(&g_threadManager, out, &data[0], info.w * 4 * info.h);
+		} else {
+			const int MIN_LINES_PER_THREAD = 4;
+			ParallelRangeLoop(&g_threadManager, [&](int l, int h) {
+				for (int y = l; y < h; ++y) {
+					memcpy((uint8_t *)out + rowPitch * y, &data[0] + info.w * 4 * y, info.w * 4);
+				}
+				}, 0, info.h, MIN_LINES_PER_THREAD);
+		}
 	} else {
-		const int MIN_LINES_PER_THREAD = 4;
-		ParallelRangeLoop(&g_threadManager, [&](int l, int h) {
-			for (int y = l; y < h; ++y) {
-				memcpy((uint8_t *)out + rowPitch * y, &data[0] + info.w * 4 * y, info.w * 4);
-			}
-		}, 0, info.h, MIN_LINES_PER_THREAD);
+		// TODO: Add sanity checks here for other formats?
+		// Just gonna do a memcpy, slightly scared of the parallel ones.
+		memcpy(out, data.data(), data.size());
 	}
 
 	return true;

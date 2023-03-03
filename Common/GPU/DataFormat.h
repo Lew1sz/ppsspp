@@ -73,6 +73,7 @@ enum class DataFormat : uint8_t {
 
 size_t DataFormatSizeInBytes(DataFormat fmt);
 bool DataFormatIsDepthStencil(DataFormat fmt);
+bool DataFormatIsBlockCompressed(DataFormat fmt);
 inline bool DataFormatIsColor(DataFormat fmt) {
 	return !DataFormatIsDepthStencil(fmt);
 }

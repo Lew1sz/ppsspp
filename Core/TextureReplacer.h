@@ -188,12 +188,17 @@ struct ReplacedTexture {
 		return (int)levels_.size();
 	}
 
+	int GetLevelDataSize(int level) const {
+		return (int)levelData_[level]->data.size();
+	}
+
 	Draw::DataFormat Format(int level) const {
 		if (initDone_) {
 			if ((size_t)level < levels_.size()) {
 				return levels_[level].fmt;
 			}
 		}
+		// This is bad, no?
 		return Draw::DataFormat::R8G8B8A8_UNORM;
 	}
 

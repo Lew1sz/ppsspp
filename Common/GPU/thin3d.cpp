@@ -93,6 +93,22 @@ bool DataFormatIsDepthStencil(DataFormat fmt) {
 	}
 }
 
+// We don't bother listing the formats that are irrelevant for PPSSPP.
+bool DataFormatIsBlockCompressed(DataFormat fmt) {
+	switch (fmt) {
+	case DataFormat::BC1_RGBA_UNORM_BLOCK:
+	case DataFormat::BC2_UNORM_BLOCK:
+	case DataFormat::BC3_UNORM_BLOCK:
+	case DataFormat::BC4_UNORM_BLOCK:
+	case DataFormat::BC5_UNORM_BLOCK:
+	case DataFormat::BC7_UNORM_BLOCK:
+	case DataFormat::ETC1:
+		return true;
+	default:
+		return false;
+	}
+}
+
 RefCountedObject::~RefCountedObject() {
 	_dbg_assert_(refcount_ == 0xDEDEDE);
 }
